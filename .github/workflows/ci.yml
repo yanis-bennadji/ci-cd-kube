@@ -1,0 +1,44 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+
+permissions:
+  contents: read
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          # Caches ~/.npm between runs, keyed on package-lock.json.
+          cache: npm
+
+      # `npm ci` installs strictly from package-lock.json and fails if the
+      # lockfile and package.json disagree, which `npm install` would silently fix.
+      - name: Install dependencies
+        run: npm ci
+
+      # A non-zero exit here fails the job, and every downstream job is skipped:
+      # this is what stops the pipeline as soon as a test fails.
+      - name: Run tests
+        run: npm test
