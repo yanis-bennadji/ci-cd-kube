@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log*
+.git
+.github
+.gitignore
+k8s
+tests
+Dockerfile
+.dockerignore
+README.md
+Consigne.pdf
+.DS_Store
