@@ -128,8 +128,8 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           BUILD_RESULT: ${{ needs.build-and-push.result }}
         run: |
-          # Possible values: success, failure, cancelled, skipped.
-          # build-and-push is skipped on purpose for pull requests.
+          # * success, failure, cancelled or skipped
+          # * build-and-push is skipped on purpose for PR
           if [[ "$TEST_RESULT" == "cancelled" || "$BUILD_RESULT" == "cancelled" ]]; then
             status=cancelled
             reason="Run was cancelled (superseded by a newer run or stopped manually)"
@@ -153,8 +153,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Ask the GitHub API which step failed in which job, so the
-          # notification points at the actual error and not just the run.
+          # *get failed job steps from the GitHub API
           details=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
             --jq '.jobs[] | select(.conclusion == "failure") | .name as $job | .steps[] | select(.conclusion == "failure") | "\($job) → \(.name)"' \
             2>/dev/null | paste -sd ';' - || true)
@@ -185,7 +184,8 @@ jobs:
           commit_message=$(git log -1 --pretty=%s "$GITHUB_SHA")
           commit_author=$(git log -1 --pretty=%an "$GITHUB_SHA")
 
-          # Plain-text fallback plus a card (cardsV2) for a richer message.
+          # * google chat plain/card message
+   
           payload=$(jq -n \
             --arg text "${icon} ${title} — ${GITHUB_REPOSITORY} @ ${GITHUB_REF_NAME} (${short_sha}) — ${RUN_URL}" \
             --arg title "${icon} ${title}" \
