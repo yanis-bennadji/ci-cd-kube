@@ -6,7 +6,6 @@ const { createApp, seed } = require('../src/app');
 let app;
 
 beforeEach(() => {
-  // Reset to a known state before each test so they never depend on execution order.
   seed();
   app = createApp();
 });

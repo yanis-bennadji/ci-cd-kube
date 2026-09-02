@@ -60,12 +60,15 @@ jobs:
         id: vars
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "app_env=production" >> "$GITHUB_OUTPUT"
-            echo "app_version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            app_env=production
+            app_version="${GITHUB_REF_NAME#v}"
           else
-            echo "app_env=development" >> "$GITHUB_OUTPUT"
-            echo "app_version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            app_env=development
+            app_version="dev-${GITHUB_SHA::7}"
           fi
+          echo "app_env=${app_env}" >> "$GITHUB_OUTPUT"
+          echo "app_version=${app_version}" >> "$GITHUB_OUTPUT"
+          echo "Building ${app_env} image, version ${app_version} (ref: ${GITHUB_REF})"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -104,3 +107,127 @@ jobs:
             GIT_SHA=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  notify:
+    name: Notify Google Chat
+    runs-on: ubuntu-latest
+    needs: [test, build-and-push]
+    if: always()
+
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Determine pipeline status
+        id: status
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build-and-push.result }}
+        run: |
+          # Possible values: success, failure, cancelled, skipped.
+          # build-and-push is skipped on purpose for pull requests.
+          if [[ "$TEST_RESULT" == "cancelled" || "$BUILD_RESULT" == "cancelled" ]]; then
+            status=cancelled
+            reason="Run was cancelled (superseded by a newer run or stopped manually)"
+          elif [[ "$TEST_RESULT" == "failure" ]]; then
+            status=failure
+            reason="Tests failed: the pipeline stopped before building any image"
+          elif [[ "$BUILD_RESULT" == "failure" ]]; then
+            status=failure
+            reason="Docker image build or push to GHCR failed"
+          else
+            status=success
+            reason=""
+          fi
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+          echo "reason=${reason}" >> "$GITHUB_OUTPUT"
+          echo "Pipeline status: ${status} (test=${TEST_RESULT}, build-and-push=${BUILD_RESULT})"
+
+      - name: Collect failed steps
+        id: failed
+        if: steps.status.outputs.status == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ask the GitHub API which step failed in which job, so the
+          # notification points at the actual error and not just the run.
+          details=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '.jobs[] | select(.conclusion == "failure") | .name as $job | .steps[] | select(.conclusion == "failure") | "\($job) → \(.name)"' \
+            2>/dev/null | paste -sd ';' - || true)
+          echo "details=${details:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "Failed steps: ${details:-unknown}"
+
+      - name: Send Google Chat notification
+        env:
+          WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          STATUS: ${{ steps.status.outputs.status }}
+          REASON: ${{ steps.status.outputs.reason }}
+          FAILED_STEPS: ${{ steps.failed.outputs.details }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          if [[ -z "$WEBHOOK_URL" ]]; then
+            echo "::error::Secret GOOGLE_CHAT_WEBHOOK_URL is not set, cannot send the notification."
+            exit 1
+          fi
+
+          case "$STATUS" in
+            success)   icon="✅"; title="Pipeline succeeded" ;;
+            failure)   icon="❌"; title="Pipeline FAILED" ;;
+            cancelled) icon="⚠️"; title="Pipeline cancelled" ;;
+          esac
+
+          short_sha="${GITHUB_SHA::7}"
+          commit_message=$(git log -1 --pretty=%s "$GITHUB_SHA")
+          commit_author=$(git log -1 --pretty=%an "$GITHUB_SHA")
+
+          # Plain-text fallback plus a card (cardsV2) for a richer message.
+          payload=$(jq -n \
+            --arg text "${icon} ${title} — ${GITHUB_REPOSITORY} @ ${GITHUB_REF_NAME} (${short_sha}) — ${RUN_URL}" \
+            --arg title "${icon} ${title}" \
+            --arg subtitle "${GITHUB_REPOSITORY} · ${GITHUB_EVENT_NAME} on ${GITHUB_REF_NAME}" \
+            --arg commit "${short_sha} — ${commit_message}" \
+            --arg author "${commit_author} (@${GITHUB_ACTOR})" \
+            --arg status "${STATUS}" \
+            --arg reason "${REASON}" \
+            --arg failed "${FAILED_STEPS}" \
+            --arg run_url "${RUN_URL}" \
+            --arg commit_url "${COMMIT_URL}" \
+            '
+            {
+              text: $text,
+              cardsV2: [{
+                cardId: "ci-cd-run",
+                card: {
+                  header: { title: $title, subtitle: $subtitle },
+                  sections: [{
+                    widgets: (
+                      [
+                        { decoratedText: { topLabel: "Status", text: $status } },
+                        { decoratedText: { topLabel: "Commit", text: $commit, wrapText: true } },
+                        { decoratedText: { topLabel: "Author", text: $author } }
+                      ]
+                      + (if $reason != "" then [{ decoratedText: { topLabel: "Failure reason", text: $reason, wrapText: true } }] else [] end)
+                      + (if $failed != "" then [{ decoratedText: { topLabel: "Failed step(s)", text: $failed, wrapText: true } }] else [] end)
+                      + [{
+                          buttonList: { buttons: [
+                            { text: "Open workflow run", onClick: { openLink: { url: $run_url } } },
+                            { text: "View commit", onClick: { openLink: { url: $commit_url } } }
+                          ] }
+                        }]
+                    )
+                  }]
+                }
+              }]
+            }')
+
+          curl --fail --silent --show-error \
+            -X POST \
+            -H 'Content-Type: application/json; charset=UTF-8' \
+            --data "$payload" \
+            "$WEBHOOK_URL" > /dev/null
+          echo "Notification sent (${STATUS})."
