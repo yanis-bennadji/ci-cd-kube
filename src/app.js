@@ -1,13 +1,9 @@
 const express = require('express');
 
-// Metadata injected at Docker build time (see Dockerfile / CI pipeline).
-// Exposing it makes it trivial to check which image is actually running.
 const APP_VERSION = process.env.APP_VERSION || 'dev';
 const APP_ENV = process.env.APP_ENV || 'development';
 const GIT_SHA = process.env.GIT_SHA || 'unknown';
 
-// In-memory store, deliberately simple: this project is about the pipeline,
-// not about persistence. It is also why no Kubernetes volume is needed.
 const items = new Map();
 let nextId = 1;
 
@@ -26,7 +22,6 @@ function createApp() {
   app.use(express.json());
   app.disable('x-powered-by');
 
-  // Service identity
   app.get('/', (req, res) => {
     res.json({
       service: 'ci-cd-kube',
@@ -36,12 +31,10 @@ function createApp() {
     });
   });
 
-  // Liveness probe: is the process responsive?
   app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', uptime: process.uptime() });
   });
 
-  // Readiness probe: can the service handle traffic?
   app.get('/ready', (req, res) => {
     res.status(200).json({ status: 'ready' });
   });

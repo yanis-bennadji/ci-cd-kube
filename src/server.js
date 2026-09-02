@@ -7,8 +7,6 @@ const server = createApp().listen(PORT, HOST, () => {
   console.log(`ci-cd-kube [${APP_ENV}] v${APP_VERSION} listening on http://${HOST}:${PORT}`);
 });
 
-// Graceful shutdown: required so Kubernetes can perform a rolling update
-// without dropping in-flight requests.
 function shutdown(signal) {
   console.log(`Received ${signal}, shutting down...`);
   server.close(() => {
