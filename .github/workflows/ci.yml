@@ -108,10 +108,49 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    permissions:
+      contents: read
+
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+
+    steps:
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.34.0'
+
+      - name: Configure kubeconfig
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          if [[ -z "$KUBE_CONFIG" ]]; then
+            echo "::error::Secret KUBE_CONFIG is not set, cannot deploy to the cluster."
+            exit 1
+          fi
+          mkdir -p ~/.kube
+          printf '%s' "$KUBE_CONFIG" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Update the deployed image
+        run: |
+          kubectl set image deployment/ci-cd-kube \
+            ci-cd-kube=${IMAGE}:main-${GITHUB_SHA::7}
+
+      - name: Wait for the rollout
+        run: |
+          kubectl rollout status deployment/ci-cd-kube --timeout=120s
+
   notify:
     name: Notify Google Chat
     runs-on: ubuntu-latest
-    needs: [test, build-and-push]
+    needs: [test, build-and-push, deploy]
     if: always()
 
     permissions:
@@ -127,10 +166,11 @@ jobs:
         env:
           TEST_RESULT: ${{ needs.test.result }}
           BUILD_RESULT: ${{ needs.build-and-push.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
         run: |
           # * success, failure, cancelled or skipped
-          # * build-and-push is skipped on purpose for PR
-          if [[ "$TEST_RESULT" == "cancelled" || "$BUILD_RESULT" == "cancelled" ]]; then
+          # * build-and-push and deploy are skipped on purpose for PR / tag pushes
+          if [[ "$TEST_RESULT" == "cancelled" || "$BUILD_RESULT" == "cancelled" || "$DEPLOY_RESULT" == "cancelled" ]]; then
             status=cancelled
             reason="Run was cancelled (superseded by a newer run or stopped manually)"
           elif [[ "$TEST_RESULT" == "failure" ]]; then
@@ -139,13 +179,16 @@ jobs:
           elif [[ "$BUILD_RESULT" == "failure" ]]; then
             status=failure
             reason="Docker image build or push to GHCR failed"
+          elif [[ "$DEPLOY_RESULT" == "failure" ]]; then
+            status=failure
+            reason="Kubernetes deployment failed: the new image was not rolled out"
           else
             status=success
             reason=""
           fi
           echo "status=${status}" >> "$GITHUB_OUTPUT"
           echo "reason=${reason}" >> "$GITHUB_OUTPUT"
-          echo "Pipeline status: ${status} (test=${TEST_RESULT}, build-and-push=${BUILD_RESULT})"
+          echo "Pipeline status: ${status} (test=${TEST_RESULT}, build-and-push=${BUILD_RESULT}, deploy=${DEPLOY_RESULT})"
 
       - name: Collect failed steps
         id: failed
