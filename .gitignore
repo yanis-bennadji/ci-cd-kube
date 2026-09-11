@@ -4,3 +4,11 @@ npm-debug.log*
 .DS_Store
 coverage/
 *.tgz
+
+# Kubernetes cluster credentials (student-specific, must not be committed)
+*.kubeconfig
+.kube/
+
+# Course instructions (local only)
+Instructions Étudiants Marseille M2 Dev 2025-2027.md
+Instructions Étudiants.html
