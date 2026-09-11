@@ -35,6 +35,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
       - name: Run tests
         run: npm test
 
@@ -108,6 +114,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
   deploy:
     name: Deploy to Kubernetes
     runs-on: ubuntu-latest
@@ -138,14 +152,17 @@ jobs:
           printf '%s' "$KUBE_CONFIG" > ~/.kube/config
           chmod 600 ~/.kube/config
 
+      - name: Apply Kubernetes manifests
+        run: kubectl apply -f k8s/
+
       - name: Update the deployed image
         run: |
           kubectl set image deployment/ci-cd-kube \
-            ci-cd-kube=${IMAGE}:main-${GITHUB_SHA::7}
+            ci-cd-kube=${IMAGE}:main-${GITHUB_SHA::7} -n ci-cd-kube
 
       - name: Wait for the rollout
         run: |
-          kubectl rollout status deployment/ci-cd-kube --timeout=120s
+          kubectl rollout status deployment/ci-cd-kube --timeout=120s -n ci-cd-kube
 
   notify:
     name: Notify Google Chat
@@ -156,6 +173,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
 
     steps:
       - name: Check out the repository
@@ -203,6 +221,28 @@ jobs:
           echo "details=${details:-unknown}" >> "$GITHUB_OUTPUT"
           echo "Failed steps: ${details:-unknown}"
 
+      - name: Find associated pull request
+        id: pr
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # * find the PR that was merged to produce this commit on main, if any
+          pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq '.[0]' 2>/dev/null || echo "")
+          if [[ -n "$pr_json" && "$pr_json" != "null" ]]; then
+            {
+              echo "number=$(echo "$pr_json" | jq -r '.number')"
+              echo "title=$(echo "$pr_json" | jq -r '.title')"
+              echo "url=$(echo "$pr_json" | jq -r '.html_url')"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "number="
+              echo "title="
+              echo "url="
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Send Google Chat notification
         env:
           WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
@@ -211,6 +251,9 @@ jobs:
           FAILED_STEPS: ${{ steps.failed.outputs.details }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_TITLE: ${{ steps.pr.outputs.title }}
+          PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           if [[ -z "$WEBHOOK_URL" ]]; then
             echo "::error::Secret GOOGLE_CHAT_WEBHOOK_URL is not set, cannot send the notification."
@@ -240,6 +283,9 @@ jobs:
             --arg failed "${FAILED_STEPS}" \
             --arg run_url "${RUN_URL}" \
             --arg commit_url "${COMMIT_URL}" \
+            --arg pr_number "${PR_NUMBER}" \
+            --arg pr_title "${PR_TITLE}" \
+            --arg pr_url "${PR_URL}" \
             '
             {
               text: $text,
@@ -256,11 +302,15 @@ jobs:
                       ]
                       + (if $reason != "" then [{ decoratedText: { topLabel: "Failure reason", text: $reason, wrapText: true } }] else [] end)
                       + (if $failed != "" then [{ decoratedText: { topLabel: "Failed step(s)", text: $failed, wrapText: true } }] else [] end)
+                      + (if $pr_number != "" then [{ decoratedText: { topLabel: "Pull Request", text: ("#" + $pr_number + " — " + $pr_title), wrapText: true } }] else [] end)
                       + [{
-                          buttonList: { buttons: [
-                            { text: "Open workflow run", onClick: { openLink: { url: $run_url } } },
-                            { text: "View commit", onClick: { openLink: { url: $commit_url } } }
-                          ] }
+                          buttonList: { buttons: (
+                            [
+                              { text: "Open workflow run", onClick: { openLink: { url: $run_url } } },
+                              { text: "View commit", onClick: { openLink: { url: $commit_url } } }
+                            ]
+                            + (if $pr_number != "" then [{ text: "View pull request", onClick: { openLink: { url: $pr_url } } }] else [] end)
+                          ) }
                         }]
                     )
                   }]
