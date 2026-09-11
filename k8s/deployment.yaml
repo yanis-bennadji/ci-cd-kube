@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ci-cd-kube
-  namespace: ci-cd-kube
   labels:
     app: ci-cd-kube
 spec:

@@ -161,11 +161,11 @@ jobs:
       - name: Update the deployed image
         run: |
           kubectl set image deployment/ci-cd-kube \
-            ci-cd-kube=${IMAGE}:main-${GITHUB_SHA::7} -n ci-cd-kube
+            ci-cd-kube=${IMAGE}:main-${GITHUB_SHA::7}
 
       - name: Wait for the rollout
         run: |
-          kubectl rollout status deployment/ci-cd-kube --timeout=120s -n ci-cd-kube
+          kubectl rollout status deployment/ci-cd-kube --timeout=120s
 
   notify:
     name: Notify Google Chat
