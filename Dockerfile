@@ -10,6 +10,13 @@ RUN npm ci --omit=dev && npm cache clean --force
 FROM node:22-alpine AS runtime
 
 
+RUN apk update && apk upgrade --no-cache
+
+
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
+
 ARG APP_ENV=development
 ARG APP_VERSION=dev
 ARG GIT_SHA=unknown
