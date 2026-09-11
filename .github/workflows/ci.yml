@@ -135,6 +135,9 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository }}
 
     steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
         with:
