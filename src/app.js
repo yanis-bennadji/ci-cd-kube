@@ -1,3 +1,4 @@
+const path = require('node:path');
 const express = require('express');
 
 const APP_VERSION = process.env.APP_VERSION || 'dev';
@@ -21,6 +22,8 @@ function createApp() {
   const app = express();
   app.use(express.json());
   app.disable('x-powered-by');
+
+  app.use('/ui', express.static(path.join(__dirname, '../public')));
 
   app.get('/', (req, res) => {
     res.json({
