@@ -5,6 +5,11 @@ npm-debug.log*
 coverage/
 *.tgz
 
+# Playwright E2E artifacts
+/test-results/
+/playwright-report/
+/playwright/.cache/
+
 # Kubernetes cluster credentials (student-specific, must not be committed)
 *.kubeconfig
 .kube/
